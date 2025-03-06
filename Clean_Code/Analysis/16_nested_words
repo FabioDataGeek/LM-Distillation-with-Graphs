@@ -1,0 +1,50 @@
+import pickle as pkl
+from utils import *
+from tqdm import tqdm
+
+
+LABEL_MAPPER = {
+    "ag-news": {0: "World", 1: "Sports", 2: "Business", 3: "Sci/Tech"},
+    "sst-2": {0: "Negative", 1: "Positive"},
+}
+
+dataset = "sst-2"
+
+labels = LABEL_MAPPER[dataset].values()
+
+results = {}
+for label in labels:
+    results[label] = {}
+    for correctness in ['correct', 'incorrect']:
+        results[label][correctness] = []
+
+with open(f"/usrvol/experiments/explainability_results/{dataset}_nx_subgraphs.pkl", "rb") as f:
+    nx_subgraphs = pkl.load(f)
+    
+print(f"Number of subgraphs: {len(nx_subgraphs)}")
+    
+    
+for label in labels:
+    for correctness in ['correct', 'incorrect']:
+        subgraphs = nx_subgraphs[label][correctness]
+    
+        for subgraph in tqdm(subgraphs):
+            for node in subgraph.nodes():
+                word = subgraph.nodes[node]["label"]
+                if not "«" in word and not "»" in word:
+                    path = {word:[]}
+                    parents = find_all_predecessors(node, subgraph)
+                    parents = sorted(parents, key=lambda x: int(x), reverse=True)
+                    if parents == None:
+                        continue
+                    for parent in parents:
+                        parent_word = subgraph.nodes[parent]["label"]
+                        if "«" in parent_word or "»" in parent_word:
+                            path[word].append(parent_word)
+                    results[label][correctness].append(path)
+                
+                
+with open(f"/usrvol/experiments/explainability_results/{dataset}_nested_words.pkl", "wb") as f:
+    pkl.dump(results, f)
+
+

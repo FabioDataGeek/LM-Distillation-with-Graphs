@@ -1,0 +1,95 @@
+import matplotlib.pyplot as plt
+import numpy as np
+import pickle as pkl
+import networkx as nx
+import re
+from networkx.drawing.nx_agraph import graphviz_layout
+
+def sanitize(text):
+    """Replace problematic characters in text for labels/attributes."""
+    if isinstance(text, str):
+        # Replace colon with hyphen and remove guillemets.
+        text = text.replace(":", "-").replace("«", "").replace("»", "")
+        return text
+    return text
+
+def safe_id(text):
+    """Generate a safe string for node IDs: remove spaces and punctuation."""
+    if isinstance(text, str):
+        safe = text.replace(" ", "_").replace('"', "")
+        safe = re.sub(r'[^\w_]', '', safe)
+        return safe
+    return str(text)
+
+def add_to_trie(key, words, trie):
+    node = trie
+    for phrase in key:
+        clean_phrase = sanitize(phrase)
+        if clean_phrase not in node:
+            node[clean_phrase] = {"_words": set(), "_children": {}}
+        node[clean_phrase]["_words"].update(words)
+        node = node[clean_phrase]["_children"]
+
+def add_nodes_from_trie(parent, subtree, path, G):
+    for phrase, info in subtree.items():
+        new_path = path + (phrase,)
+        # Generate a safe node id using only safe characters.
+        node_id = "ROOT_" + "_".join(safe_id(phrase) for phrase in new_path)
+        count = len(info["_words"])
+        clean_label = sanitize(phrase)
+        G.add_node(node_id, label=clean_label, count=str(count))
+        G.add_edge(parent, node_id)
+        add_nodes_from_trie(node_id, info["_children"], new_path, G)
+
+# Load your data (replace with your actual nested dictionary)
+dataset = "ag-news"
+with open(f"/usrvol/experiments/explainability_results/{dataset}_nested_words.pkl", "rb") as f:
+    data = pkl.load(f)
+
+# Loop over each combination of dataset label and correctness.
+# For ag-news, this should result in 8 different plots.
+for label in data:
+    
+    for correctness in data[label]:
+        # Build order_to_words for the specific combination.
+        order_to_words = {}
+        for subgraph in data[label][correctness]:
+            for word, phrases in subgraph.items():
+                key = tuple(phrases)  # preserve the order
+                order_to_words.setdefault(key, set()).add(word)
+                
+        # Filter to the top 50 unique phrase orders (by word count)
+        top_n = 10
+        sorted_items = sorted(order_to_words.items(), key=lambda x: len(x[1]), reverse=True)[:top_n]
+        order_to_words_filtered = dict(sorted_items)
+        
+        # Build a trie from the filtered keys.
+        trie = {}
+        for key, words in order_to_words_filtered.items():
+            clean_key = tuple(sanitize(phrase) for phrase in key)
+            add_to_trie(clean_key, words, trie)
+        
+        # Convert the trie into a NetworkX DiGraph.
+        G = nx.DiGraph()
+        G.add_node("ROOT", label="ROOT", count="")
+        add_nodes_from_trie("ROOT", trie, (), G)
+        
+        # Compute layout using Graphviz; specify the root.
+        pos = graphviz_layout(G, prog='dot', root='ROOT')
+        plt.figure(figsize=(12, 12))
+        nx.draw(G, pos, with_labels=False, arrows=True, node_color='lightblue', node_size=500)
+        node_labels = {node: f"{G.nodes[node]['label']}\n({G.nodes[node]['count']})" for node in G.nodes()}
+        nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=8)
+        plt.title(f"Visualization of Top 50 Unique Phrase Orders as a Trie\nLabel: {label}, Correctness: {correctness}")
+        plt.tight_layout()
+        
+        # Save each plot as a PDF file.
+        if label == 'Sci/Tech':
+            output_label = 'SciTech'
+        else:
+            output_label = label
+        output_filename = f"{dataset}_{output_label}_{correctness}_phrase_trie.pdf"
+        plt.savefig(output_filename, format='pdf')
+        plt.close()
+        
+        print(f"Saved plot for Label: {label}, Correctness: {correctness} as {output_filename}")
